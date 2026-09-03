@@ -1,0 +1,10 @@
+{
+  "name": "M.S.Tech",
+  "description": "Trạm Quan Trắc Nông Nghiệp Tự Động M.S.Tech",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
