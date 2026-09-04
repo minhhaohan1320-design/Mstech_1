@@ -19,7 +19,36 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
+
+  // API Route for PDF Analysis
+  app.post("/api/analyze-pdf", async (req, res) => {
+    try {
+      const { pdfBase64, promptText } = req.body;
+      
+      if (!pdfBase64) {
+        return res.status(400).json({ error: "Không tìm thấy dữ liệu PDF." });
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.7-flash",
+        contents: [
+          promptText || "Hãy phân tích nội dung tài liệu này và đưa ra nhận xét, tóm tắt những điểm chính liên quan đến nông nghiệp.",
+          {
+            inlineData: {
+              data: pdfBase64,
+              mimeType: "application/pdf"
+            }
+          }
+        ]
+      });
+
+      res.json({ result: response.text });
+    } catch (error: any) {
+      console.error("AI PDF Error:", error);
+      res.status(500).json({ error: "Lỗi khi phân tích PDF: " + error.message });
+    }
+  });
 
   // API Route for AI Analysis
   app.post("/api/analyze", async (req, res) => {

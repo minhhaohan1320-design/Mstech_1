@@ -104,15 +104,17 @@ export default function App() {
   const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
 
   useEffect(() => {
-    getRedirectResult(auth)
-      .then((result) => {
-        if (result?.user) {
-          setUser(result.user);
-        }
-      })
-      .catch((error) => {
-        console.error("Redirect auth error:", error);
-      });
+    if (typeof window !== 'undefined' && window.self === window.top) {
+      getRedirectResult(auth)
+        .then((result) => {
+          if (result?.user) {
+            setUser(result.user);
+          }
+        })
+        .catch((error) => {
+          console.error("Redirect auth error:", error);
+        });
+    }
 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -209,6 +211,11 @@ export default function App() {
   // AI Analysis State
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // PDF Analysis State
+  const [isAnalyzingPdf, setIsAnalyzingPdf] = useState(false);
+  const [pdfAnalysisResult, setPdfAnalysisResult] = useState<string | null>(null);
+  const pdfInputRef = React.useRef<HTMLInputElement>(null);
 
   // SD Card State
   const [isSyncingSd, setIsSyncingSd] = useState(false);
@@ -430,24 +437,49 @@ export default function App() {
     const rawK = getAvg(sensorData.npk_data?.k);
     const rawMoist = getAvg(sensorData.do_am_dat);
     const rawSoilTemp = getAvg(sensorData.nhiet_do_dat);
-    const rawPh = getAvg(sensorData.ph_data);
+    const rawPh = getAvg(sensorData.ph_data) * 2; // Nhân đôi do phần cứng đã hàn thêm điện trở
     const waterTemp = Number(sensorData.temp_nuoc) || 25; // Default 25C if missing
     
     // 2. Calibration Formulas (Original) + Offsets
+    // --- Bù trừ nhiệt độ cho độ pH theo Phương trình Nernst ---
+    const R = 8.314; // Hằng số khí lý tưởng (J/(mol·K))
+    const F = 96485; // Hằng số Faraday (C/mol)
+    const T_kelvin = 273.15 + waterTemp; // Nhiệt độ tuyệt đối của dung dịch (K)
+    
+    // Độ dốc lý thuyết (S) ở nhiệt độ hiện tại (mV/đơn vị pH)
+    const S_T = ((2.303 * R * T_kelvin) / F) * 1000; 
+    // Độ dốc lý thuyết ở 25 độ C (298.15 K) ~ 59.16 mV/pH
+    const S_25 = ((2.303 * R * 298.15) / F) * 1000;
+    
+    // Tinh chỉnh pH: pH_chuan = 7 + (pH_tho - 7) * (S_25 / S_T)
+    // (Giả sử điện cực chuẩn có thế 0 mV tại pH = 7)
+    let phAdjusted = 0;
+    if (rawPh > 0) {
+      phAdjusted = 7 + (rawPh - 7) * (S_25 / S_T);
+    }
+    
+    // NPK Calibration Formula: NPK_chuan = (A * NPK_tho) + [B * (T - T_ref)] + [C * (H - H_ref)] + D
+    // T_ref = 25, H_ref = 60
+    const T = rawSoilTemp;
+    const H = rawMoist;
+    const T_ref = 25;
+    const H_ref = 60;
+    
+    // Hệ số hiệu chuẩn (A, B, C). D sẽ được lấy từ biến offsets (calibrationData)
+    const COEF_A = 1.0; 
+    const COEF_B = -0.5; // Ví dụ: Bù trừ nhiệt độ (giảm khi nhiệt độ cao)
+    const COEF_C = -0.2; // Ví dụ: Bù trừ độ ẩm (giảm khi độ ẩm cao)
 
-    // Water Temp adjusts pH (-0.003 pH per degree C above 25)
-    const phAdjusted = rawPh > 0 ? rawPh + 0.003 * (25 - waterTemp) : 0;
-    
-    // Soil Temp and Moisture adjusts NPK
-    // Base conditions: 25C and 50% Moisture. If higher, sensor reads higher due to conductivity, so we compensate down.
-    const tempComp = (25 - rawSoilTemp) * 0.01;
-    const moistComp = (50 - rawMoist) * 0.005;
-    const npkFactor = 1.0 + tempComp + moistComp;
-    
+    const calibrateNPK = (rawVal: number, offsetD: number) => {
+      if (rawVal <= 0) return 0;
+      const calibrated = (COEF_A * rawVal) + (COEF_B * (T - T_ref)) + (COEF_C * (H - H_ref)) + (Number(offsetD) || 0);
+      return Math.max(0, calibrated);
+    };
+
     return {
-      n: (rawN > 0 ? Math.max(0, rawN * npkFactor) : 0) + (Number(offsets.n) || 0),
-      p: (rawP > 0 ? Math.max(0, rawP * npkFactor) : 0) + (Number(offsets.p) || 0),
-      k: (rawK > 0 ? Math.max(0, rawK * npkFactor) : 0) + (Number(offsets.k) || 0),
+      n: calibrateNPK(rawN, offsets.n),
+      p: calibrateNPK(rawP, offsets.p),
+      k: calibrateNPK(rawK, offsets.k),
       moisture: rawMoist + (Number(offsets.moisture) || 0),
       soilTemp: rawSoilTemp + (Number(offsets.soilTemp) || 0),
       ph: (phAdjusted > 0 ? Math.max(0, Math.min(14, phAdjusted)) : 0) + (Number(offsets.ph) || 0),
@@ -484,6 +516,57 @@ export default function App() {
     });
     
     alert("Đã lưu dữ liệu trung bình (đã tinh chỉnh) vào hệ thống biểu đồ!");
+  };
+
+  const handleClearCurrentData = async () => {
+    if (!deviceId) return;
+    if (window.confirm("Bạn có chắc muốn xoá chỉ số vừa đo hiện tại trên hệ thống để đo lại (nếu đo nhầm khu vực)?")) {
+      try {
+        await set(ref(db, `/Stations/${deviceId}/Data`), null);
+        alert("Đã xoá dữ liệu đo! Bạn có thể đo lại khu vực khác.");
+      } catch (error) {
+        console.error("Lỗi khi xoá dữ liệu:", error);
+      }
+    }
+  };
+
+  const handleExportSinglePDF = () => {
+    if (!processedData) {
+      alert("Chưa có dữ liệu để xuất PDF!");
+      return;
+    }
+    
+    import('jspdf').then(({ default: jsPDF }) => {
+      import('jspdf-autotable').then(({ default: autoTable }) => {
+        const doc = new jsPDF();
+        
+        doc.setFontSize(18);
+        doc.text("Kieu mau bao cao - M.S.TECH", 14, 20);
+        
+        doc.setFontSize(12);
+        doc.text(`Khu vuc do: ${activeZone}`, 14, 30);
+        doc.text(`Thoi gian: ${new Date().toLocaleString('vi-VN')}`, 14, 38);
+        
+        autoTable(doc, {
+          startY: 45,
+          head: [['Chi so', 'Gia tri', 'Don vi']],
+          body: [
+            ['Dam (N)', formatNumber(processedData.n), 'mg/kg'],
+            ['Lan (P)', formatNumber(processedData.p), 'mg/kg'],
+            ['Kali (K)', formatNumber(processedData.k), 'mg/kg'],
+            ['Do am dat', formatNumber(processedData.moisture), '%'],
+            ['Nhiet do dat', formatNumber(processedData.soilTemp), 'C'],
+            ['pH nuoc', formatNumber(processedData.ph), ''],
+            ['Nhiet do nuoc', formatNumber(processedData.waterTemp), 'C'],
+          ],
+        });
+        
+        doc.save(`MSTech_ChiSo_${activeZone}.pdf`);
+      });
+    }).catch(err => {
+      console.error("Load pdf lib error", err);
+      alert("Không thể tải thư viện tạo PDF. Vui lòng thử lại sau.");
+    });
   };
 
   const handleAiAnalysis = async () => {
@@ -531,6 +614,62 @@ export default function App() {
       alert("Không thể kết nối đến máy chủ AI.");
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleAnalyzePdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/pdf') {
+      alert("Vui lòng tải lên file định dạng PDF.");
+      return;
+    }
+
+    setIsAnalyzingPdf(true);
+    setPdfAnalysisResult(null);
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const base64Data = (event.target?.result as string).split(',')[1];
+        
+        const response = await fetch('/api/analyze-pdf', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            pdfBase64: base64Data,
+          })
+        });
+
+        const data = await response.json();
+        if (response.ok) {
+          setPdfAnalysisResult(data.result);
+        } else {
+          alert(data.error || "Có lỗi xảy ra khi phân tích PDF.");
+        }
+        setIsAnalyzingPdf(false);
+      };
+      
+      reader.onerror = () => {
+        alert("Lỗi khi đọc file PDF.");
+        setIsAnalyzingPdf(false);
+      };
+      
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error("PDF upload error:", error);
+      alert("Đã xảy ra lỗi khi tải lên PDF.");
+      setIsAnalyzingPdf(false);
+    }
+  };
+
+  const handleClearPdf = () => {
+    setPdfAnalysisResult(null);
+    if (pdfInputRef.current) {
+      pdfInputRef.current.value = '';
     }
   };
 
@@ -1203,13 +1342,22 @@ export default function App() {
               )}
             </div>
 
-            <button 
-              onClick={handleSaveData}
-              className="w-full py-4 bg-emerald-100 text-emerald-700 rounded-2xl font-bold flex items-center justify-center space-x-2 hover:bg-emerald-200 transition-colors"
-            >
-              <Database className="w-5 h-5" />
-              <span>LƯU DỮ LIỆU VÀO BIỂU ĐỒ</span>
-            </button>
+            <div className="flex gap-3">
+              <button 
+                onClick={handleSaveData}
+                className="w-1/2 py-4 bg-emerald-100 text-emerald-700 rounded-2xl font-bold flex items-center justify-center space-x-2 hover:bg-emerald-200 transition-colors text-sm"
+              >
+                <Database className="w-5 h-5" />
+                <span>LƯU DỮ LIỆU</span>
+              </button>
+              <button 
+                onClick={handleClearCurrentData}
+                className="w-1/2 py-4 bg-red-100 text-red-700 rounded-2xl font-bold flex items-center justify-center space-x-2 hover:bg-red-200 transition-colors text-sm"
+              >
+                <Trash2 className="w-5 h-5" />
+                <span>XOÁ CHỈ SỐ</span>
+              </button>
+            </div>
           </div>
         </section>
 
@@ -1532,6 +1680,81 @@ export default function App() {
           </div>
         </section>
 
+        {/* TẦNG 5: Phân tích tài liệu PDF */}
+        <section className="space-y-4">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 font-bold flex items-center justify-center border border-emerald-200">
+              5
+            </div>
+            <h2 className="text-lg font-bold text-emerald-600 uppercase tracking-wide">Tầng 5: Phân tích Tài liệu PDF</h2>
+          </div>
+          
+          <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 space-y-6">
+            <div className="flex flex-col items-center justify-center py-2">
+               <div className="w-24 h-24 bg-purple-50 rounded-full border-4 border-purple-100 flex items-center justify-center overflow-hidden relative shadow-sm">
+                  <ChibiMarine chapter="whiteScar" className="w-[120%] h-[120%]" />
+               </div>
+               <div className="mt-2 text-[10px] text-gray-400 font-medium uppercase tracking-widest text-center px-4">
+                 <span className="text-purple-600 font-bold">White Scar</span> đang {isAnalyzingPdf ? 'đọc tài liệu...' : 'chờ file PDF'}
+               </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <FileText className="w-5 h-5 text-purple-600" />
+                TẢI LÊN TÀI LIỆU (PDF)
+              </h3>
+              <p className="text-sm text-gray-500 mb-4">
+                Tải lên một file PDF để Trí tuệ Nhân tạo tóm tắt và đánh giá dữ liệu.
+              </p>
+              
+              <div className="bg-gray-50 border-2 border-dashed border-gray-300 rounded-2xl p-6 text-center hover:bg-gray-100 transition-colors relative">
+                <input 
+                  type="file" 
+                  accept="application/pdf"
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  onChange={handleAnalyzePdf}
+                  ref={pdfInputRef}
+                  disabled={isAnalyzingPdf}
+                />
+                
+                <div className="flex flex-col items-center justify-center space-y-2">
+                  {isAnalyzingPdf ? (
+                    <>
+                      <Loader2 className="w-8 h-8 text-purple-500 animate-spin" />
+                      <p className="text-sm font-bold text-purple-600">Đang đọc tài liệu...</p>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-8 h-8 text-gray-400" />
+                      <p className="text-sm font-bold text-gray-600">Bấm hoặc Kéo thả file PDF vào đây</p>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {pdfAnalysisResult && (
+              <div className="mt-6 border border-purple-200 rounded-2xl overflow-hidden shadow-sm">
+                <div className="bg-purple-600 text-white p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-5 h-5" />
+                    <span className="font-bold">KẾT QUẢ PHÂN TÍCH TÀI LIỆU</span>
+                  </div>
+                  <button 
+                    onClick={handleClearPdf}
+                    className="p-1 hover:bg-purple-500 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="p-5 bg-purple-50 prose prose-sm prose-purple max-w-none text-gray-800 h-96 overflow-y-auto">
+                  <Markdown>{pdfAnalysisResult}</Markdown>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
       </main>
 
       {/* WiFi Config Modal */}
