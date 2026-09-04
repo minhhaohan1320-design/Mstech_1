@@ -39,21 +39,41 @@ const ChibiMarine = ({ chapter, className = "" }: { chapter: ChibiChapter, class
   const [spriteUrl, setSpriteUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    setSpriteUrl(localStorage.getItem('chibiSprite'));
-    const handleUpdate = () => setSpriteUrl(localStorage.getItem('chibiSprite'));
-    window.addEventListener('chibiSpriteUpdated', handleUpdate);
-    return () => window.removeEventListener('chibiSpriteUpdated', handleUpdate);
+    // 1. Lấy ảnh tạm từ Local Storage (hiển thị tức thì)
+    const localSprite = localStorage.getItem('chibiSprite');
+    if (localSprite) {
+      setSpriteUrl(localSprite);
+    }
+
+    // 2. Đồng bộ với Firebase (để ảnh có mặt trên mọi thiết bị, bao gồm cả Laptop)
+    const spriteRef = ref(db, '/UI/chibiSprite');
+    const unsubscribe = onValue(spriteRef, (snapshot) => {
+      const val = snapshot.val();
+      if (val) {
+        setSpriteUrl(val);
+        localStorage.setItem('chibiSprite', val);
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => {
+      reader.onload = async (event) => {
         const result = event.target?.result as string;
+        // Lưu local
         localStorage.setItem('chibiSprite', result);
         setSpriteUrl(result);
-        window.dispatchEvent(new Event('chibiSpriteUpdated'));
+        
+        // Đẩy lên Firebase để đồng bộ sang các máy khác
+        try {
+          await set(ref(db, '/UI/chibiSprite'), result);
+        } catch (error) {
+          console.error("Failed to sync sprite to Firebase:", error);
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -85,6 +105,16 @@ const ChibiMarine = ({ chapter, className = "" }: { chapter: ChibiChapter, class
       />
     </div>
   );
+};
+
+const getCurrentSeason = () => {
+  const month = new Date().getMonth() + 1; // 1 to 12
+  // Khí hậu miền Bắc Nam nói chung:
+  // Xuân (2, 3, 4), Hạ (5, 6, 7), Thu (8, 9, 10), Đông (11, 12, 1)
+  if (month >= 2 && month <= 4) return "Mùa Xuân";
+  if (month >= 5 && month <= 7) return "Mùa Hạ";
+  if (month >= 8 && month <= 10) return "Mùa Thu";
+  return "Mùa Đông";
 };
 
 export default function App() {
@@ -196,7 +226,37 @@ export default function App() {
 
   // New UI States
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [activeZone, setActiveZone] = useState('khu-vuon-a');
+  
+  const [zones, setZones] = useState<any[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('mst_zones');
+      if (saved) return JSON.parse(saved);
+    }
+    return [
+      { id: 'khu-vuon-a', name: 'Khu Vườn A (Đất)', type: 'soil' },
+      { id: 'he-thong-tuoi', name: 'Hệ Thống Tưới (Nước)', type: 'water' }
+    ];
+  });
+  
+  const [activeZone, setActiveZone] = useState(zones[0]?.id || 'khu-vuon-a');
+  
+  // Save zones to local storage when changed
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('mst_zones', JSON.stringify(zones));
+    }
+  }, [zones]);
+
+  const activeZoneObj = zones.find(z => z.id === activeZone) || zones[0];
+  const activeZoneName = activeZoneObj?.name || 'Khu vực';
+
+  // Zone Modal States
+  const [showAddZoneModal, setShowAddZoneModal] = useState(false);
+  const [newZoneName, setNewZoneName] = useState('');
+  const [newZoneType, setNewZoneType] = useState('soil');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
   const [inputTab, setInputTab] = useState('dat');
   const [showWifiModal, setShowWifiModal] = useState(false);
   const [wifiSsid, setWifiSsid] = useState('');
@@ -489,6 +549,60 @@ export default function App() {
 
   const [savedRecords, setSavedRecords] = useState<any[]>([]);
 
+  const handleAddZone = () => {
+    setNewZoneName('');
+    setNewZoneType('soil');
+    setShowAddZoneModal(true);
+  };
+
+  const confirmAddZone = () => {
+    if (newZoneName.trim() !== '') {
+      const newZone = {
+        id: `zone-${Date.now()}`,
+        name: newZoneName.trim(),
+        type: newZoneType
+      };
+      setZones(prev => [...prev, newZone]);
+      setActiveZone(newZone.id);
+      setShowAddZoneModal(false);
+    } else {
+      alert("Vui lòng nhập tên khu vực!");
+    }
+  };
+
+  const handleDeleteZone = () => {
+    if (zones.length <= 1) {
+      alert("Hệ thống cần ít nhất 1 khu vực để hoạt động!");
+      return;
+    }
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeleteZone = () => {
+    setZones(prev => {
+      const filtered = prev.filter(z => z.id !== activeZone);
+      if (filtered.length > 0) {
+        setActiveZone(filtered[0].id);
+      }
+      return filtered;
+    });
+    setShowDeleteConfirm(false);
+  };
+
+  const handleResetZones = () => {
+    setShowResetConfirm(true);
+  };
+
+  const confirmResetZones = () => {
+    const defaultZ = [
+      { id: 'khu-vuon-a', name: 'Khu Vườn A (Đất)', type: 'soil' },
+      { id: 'he-thong-tuoi', name: 'Hệ Thống Tưới (Nước)', type: 'water' }
+    ];
+    setZones(defaultZ);
+    setActiveZone(defaultZ[0].id);
+    setShowResetConfirm(false);
+  };
+
   const handleSaveData = () => {
     if (!processedData) {
       alert("Chưa có dữ liệu để lưu!");
@@ -544,7 +658,7 @@ export default function App() {
         doc.text("Kieu mau bao cao - M.S.TECH", 14, 20);
         
         doc.setFontSize(12);
-        doc.text(`Khu vuc do: ${activeZone}`, 14, 30);
+        doc.text(`Khu vuc do: ${activeZoneName}`, 14, 30);
         doc.text(`Thoi gian: ${new Date().toLocaleString('vi-VN')}`, 14, 38);
         
         autoTable(doc, {
@@ -561,7 +675,7 @@ export default function App() {
           ],
         });
         
-        doc.save(`MSTech_ChiSo_${activeZone}.pdf`);
+        doc.save(`MSTech_ChiSo_${activeZoneName.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
       });
     }).catch(err => {
       console.error("Load pdf lib error", err);
@@ -1026,7 +1140,7 @@ export default function App() {
         <div className="text-center space-y-2 mb-8">
           <div className="flex items-center justify-center space-x-2 text-amber-600 font-semibold text-sm uppercase tracking-wider">
             <Leaf className="w-4 h-4" />
-            <span>Mùa Thu - Bắc Giang</span>
+            <span>{getCurrentSeason()} - {location || 'Bắc Giang'}</span>
           </div>
           <h1 className="text-3xl font-bold text-gray-900">Hệ Thống M.S.Tech 2.0</h1>
           <p className="text-gray-500">Trung tâm điều khiển nông nghiệp thông minh 4 tầng</p>
@@ -1056,32 +1170,42 @@ export default function App() {
             <div>
               <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">Chọn khu vực đang tác động</p>
               <div className="flex flex-wrap gap-3">
+                {zones.map((zone) => (
+                  <button 
+                    key={zone.id}
+                    onClick={() => {
+                      setActiveZone(zone.id);
+                      setInputTab(zone.type === 'soil' ? 'dat' : 'nuoc');
+                    }}
+                    className={`px-4 py-2 rounded-xl flex items-center space-x-2 font-medium transition-colors ${
+                      activeZone === zone.id 
+                        ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' 
+                        : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    {zone.type === 'soil' ? <Leaf className="w-4 h-4" /> : <Droplets className="w-4 h-4" />}
+                    <span>{zone.name}</span>
+                  </button>
+                ))}
+                
                 <button 
-                  onClick={() => setActiveZone('khu-vuon-a')}
-                  className={`px-4 py-2 rounded-xl flex items-center space-x-2 font-medium transition-colors ${activeZone === 'khu-vuon-a' ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' : 'bg-gray-50 text-gray-600 border border-gray-200'}`}
+                  onClick={handleAddZone}
+                  className="w-10 h-10 rounded-xl bg-gray-50 text-emerald-600 border border-emerald-200 font-medium flex items-center justify-center hover:bg-emerald-50 transition-colors"
+                  title="Thêm khu vực mới"
                 >
-                  <Leaf className="w-4 h-4" />
-                  <span>Khu Vườn A (Đất)</span>
-                </button>
-                <button 
-                  onClick={() => setActiveZone('he-thong-tuoi')}
-                  className={`px-4 py-2 rounded-xl flex items-center space-x-2 font-medium transition-colors ${activeZone === 'he-thong-tuoi' ? 'bg-emerald-500 text-white shadow-md shadow-emerald-200' : 'bg-gray-50 text-gray-600 border border-gray-200'}`}
-                >
-                  <Droplets className="w-4 h-4" />
-                  <span>Hệ Thống Tưới (Nước)</span>
-                </button>
-                <button className="px-4 py-2 rounded-xl bg-gray-50 text-gray-600 border border-gray-200 font-medium flex items-center space-x-2">
-                  <Leaf className="w-4 h-4 text-gray-400" />
-                  <span>Khu đất mới 2</span>
-                </button>
-                <button className="w-10 h-10 rounded-xl bg-gray-50 text-emerald-600 border border-emerald-200 font-medium flex items-center justify-center hover:bg-emerald-50">
                   <Plus className="w-5 h-5" />
                 </button>
-                <button className="px-4 py-2 rounded-xl bg-rose-50 text-rose-600 font-medium flex items-center space-x-1">
+                <button 
+                  onClick={handleDeleteZone}
+                  className="px-4 py-2 rounded-xl bg-rose-50 text-rose-600 font-medium flex items-center space-x-1 border border-rose-100 hover:bg-rose-100 transition-colors"
+                >
                   <Trash2 className="w-4 h-4" />
                   <span>Xóa</span>
                 </button>
-                <button className="px-4 py-2 rounded-xl bg-gray-100 text-gray-600 font-medium">
+                <button 
+                  onClick={handleResetZones}
+                  className="px-4 py-2 rounded-xl bg-gray-100 text-gray-600 font-medium border border-gray-200 hover:bg-gray-200 transition-colors"
+                >
                   Reset Hết
                 </button>
               </div>
@@ -1296,7 +1420,7 @@ export default function App() {
                 <span className="text-xs text-gray-400 font-bold">GPS</span>
               </div>
               <div className="relative">
-                <input type="text" placeholder={activeZone === 'khu-vuon-a' ? "Khu Vườn A (Đất)" : "Hệ Thống Tưới (Nước)"} className="w-full pl-4 pr-16 py-4 rounded-2xl bg-gray-50 border border-gray-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm font-medium text-gray-700" />
+                <input type="text" placeholder={activeZoneName} className="w-full pl-4 pr-16 py-4 rounded-2xl bg-gray-50 border border-gray-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all text-sm font-medium text-gray-700" readOnly />
                 <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">TÊN</span>
               </div>
             </div>
@@ -1680,22 +1804,22 @@ export default function App() {
           </div>
         </section>
 
-        {/* TẦNG 5: Phân tích tài liệu PDF */}
+        {/* TẦNG 6: Phân tích tài liệu PDF */}
         <section className="space-y-4">
           <div className="flex items-center space-x-3">
             <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 font-bold flex items-center justify-center border border-emerald-200">
-              5
+              6
             </div>
-            <h2 className="text-lg font-bold text-emerald-600 uppercase tracking-wide">Tầng 5: Phân tích Tài liệu PDF</h2>
+            <h2 className="text-lg font-bold text-emerald-600 uppercase tracking-wide">Tầng 6: Phân tích Tài liệu PDF</h2>
           </div>
           
           <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-200 space-y-6">
             <div className="flex flex-col items-center justify-center py-2">
-               <div className="w-24 h-24 bg-purple-50 rounded-full border-4 border-purple-100 flex items-center justify-center overflow-hidden relative shadow-sm">
-                  <ChibiMarine chapter="whiteScar" className="w-[120%] h-[120%]" />
+               <div className="w-24 h-24 bg-red-50 rounded-full border-4 border-red-100 flex items-center justify-center overflow-hidden relative shadow-sm">
+                  <ChibiMarine chapter="bloodAngel" className="w-[120%] h-[120%]" />
                </div>
                <div className="mt-2 text-[10px] text-gray-400 font-medium uppercase tracking-widest text-center px-4">
-                 <span className="text-purple-600 font-bold">White Scar</span> đang {isAnalyzingPdf ? 'đọc tài liệu...' : 'chờ file PDF'}
+                 <span className="text-red-600 font-bold">Blood Angel</span> đang {isAnalyzingPdf ? 'đọc tài liệu...' : 'chờ file PDF'}
                </div>
             </div>
 
@@ -1915,6 +2039,114 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Add Zone Modal */}
+      {showAddZoneModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl p-6 space-y-4">
+            <h3 className="text-lg font-bold text-gray-900">Thêm khu vực mới</h3>
+            
+            <div>
+              <label className="text-xs font-bold text-gray-500 mb-2 block">Tên khu vực</label>
+              <input 
+                type="text" 
+                value={newZoneName}
+                onChange={(e) => setNewZoneName(e.target.value)}
+                placeholder="VD: Khu vườn B"
+                className="w-full px-4 py-3 rounded-2xl bg-gray-50 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-gray-500 mb-2 block">Loại môi trường</label>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setNewZoneType('soil')}
+                  className={`flex-1 py-3 rounded-2xl font-bold border-2 flex items-center justify-center gap-2 transition-colors ${newZoneType === 'soil' ? 'bg-emerald-50 border-emerald-500 text-emerald-700' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                >
+                  <Leaf className="w-5 h-5" /> Đất
+                </button>
+                <button 
+                  onClick={() => setNewZoneType('water')}
+                  className={`flex-1 py-3 rounded-2xl font-bold border-2 flex items-center justify-center gap-2 transition-colors ${newZoneType === 'water' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                >
+                  <Droplets className="w-5 h-5" /> Nước
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <button 
+                onClick={() => setShowAddZoneModal(false)}
+                className="flex-1 py-4 rounded-2xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
+              >
+                Hủy
+              </button>
+              <button 
+                onClick={confirmAddZone}
+                className="flex-1 py-4 rounded-2xl font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200"
+              >
+                Thêm Mới
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Zone Confirm Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl p-6 space-y-4 text-center">
+            <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center mx-auto text-rose-500 mb-2">
+              <Trash2 className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold text-gray-900">Xóa khu vực?</h3>
+            <p className="text-sm text-gray-500">Bạn có chắc chắn muốn xóa khu vực <strong className="text-gray-800">{activeZoneName}</strong> không? Hành động này không thể hoàn tác.</p>
+            <div className="flex gap-3 pt-4">
+              <button 
+                onClick={() => setShowDeleteConfirm(false)}
+                className="flex-1 py-4 rounded-2xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
+              >
+                Hủy
+              </button>
+              <button 
+                onClick={confirmDeleteZone}
+                className="flex-1 py-4 rounded-2xl font-bold text-white bg-rose-600 hover:bg-rose-700 transition-colors shadow-lg shadow-rose-200"
+              >
+                Xóa ngay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Zones Confirm Modal */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl p-6 space-y-4 text-center">
+            <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto text-amber-600 mb-2">
+              <RefreshCw className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold text-gray-900">Khôi phục mặc định?</h3>
+            <p className="text-sm text-gray-500">Toàn bộ danh sách khu vực sẽ bị xoá và trở về 2 khu vực cơ bản ban đầu. Bạn có chắc không?</p>
+            <div className="flex gap-3 pt-4">
+              <button 
+                onClick={() => setShowResetConfirm(false)}
+                className="flex-1 py-4 rounded-2xl font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
+              >
+                Hủy
+              </button>
+              <button 
+                onClick={confirmResetZones}
+                className="flex-1 py-4 rounded-2xl font-bold text-white bg-amber-600 hover:bg-amber-700 transition-colors shadow-lg shadow-amber-200"
+              >
+                Đồng ý
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
