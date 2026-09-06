@@ -497,7 +497,7 @@ export default function App() {
     const rawK = getAvg(sensorData.npk_data?.k);
     const rawMoist = getAvg(sensorData.do_am_dat);
     const rawSoilTemp = getAvg(sensorData.nhiet_do_dat);
-    const rawPh = getAvg(sensorData.ph_data) * 2; // Nhân đôi do phần cứng đã hàn thêm điện trở
+    const rawPh = getAvg(sensorData.ph_data); // Đã sửa: Không nhân đôi chỉ số pH nữa
     const waterTemp = Number(sensorData.temp_nuoc) || 25; // Default 25C if missing
     
     // 2. Calibration Formulas (Original) + Offsets
@@ -990,10 +990,10 @@ export default function App() {
 
             <form onSubmit={handleManualConnect} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-emerald-900 mb-1">Mã Trạm (Địa chỉ MAC)</label>
+                <label className="block text-sm font-medium text-emerald-900 mb-1">Mã Trạm (Thiết bị ESP32)</label>
                 <input
                   type="text"
-                  placeholder="VD: AC51A9A5FC84"
+                  placeholder=""
                   value={manualInput}
                   onChange={(e) => setManualInput(e.target.value)}
                   className="w-full px-4 py-3 rounded-xl border border-emerald-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-shadow"
@@ -1896,13 +1896,13 @@ export default function App() {
             </div>
             <form onSubmit={handleUpdateWifi} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">Tên WiFi (SSID) *</label>
+                <label className="block text-sm font-bold text-gray-700 mb-1">Tên WiFi Mặc định (SSID) *</label>
                 <input 
                   type="text" 
                   required
                   value={wifiSsid}
                   onChange={(e) => setWifiSsid(e.target.value)}
-                  placeholder="Nhập tên WiFi mới..."
+                  placeholder="Nhập tên WiFi để lưu mặc định..."
                   className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
               </div>
@@ -1915,6 +1915,9 @@ export default function App() {
                   placeholder="Nhập mật khẩu (nếu có)..."
                   className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
+                <p className="text-xs text-emerald-600 mt-2 font-medium italic">
+                  * Trạm sẽ tự động lưu thông tin mạng này vào bộ nhớ Flash để làm mạng kết nối mặc định cho mọi lần khởi động sau.
+                </p>
               </div>
               <p className="text-xs text-gray-500 italic">
                 Lưu ý: Sau khi gửi lệnh, trạm ESP32 sẽ khởi động lại và thử kết nối vào mạng mới. Hãy đảm bảo thông tin chính xác.
