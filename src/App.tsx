@@ -374,7 +374,7 @@ export default function App() {
       });
       
       if (result && result.data) {
-        const id = result.data.trim();
+        const id = result.data.trim().toUpperCase();
         if (/[.#$\[\]]/.test(id)) {
           setLoginError("Mã QR không hợp lệ. Vui lòng chỉ tải ảnh mã QR chứa Địa chỉ MAC (VD: AC51A9A5FC84)");
         } else {
@@ -407,7 +407,7 @@ export default function App() {
 
   const handleManualConnect = (e: React.FormEvent) => {
     e.preventDefault();
-    const id = manualInput.trim();
+    const id = manualInput.trim().toUpperCase();
     if (id) {
       if (/[.#$\[\]]/.test(id)) {
         setLoginError("Mã trạm không được chứa các ký tự đặc biệt như: . # $ [ ]");
@@ -919,7 +919,7 @@ export default function App() {
                 <Scanner
                   onScan={(detectedCodes) => {
                     if (detectedCodes && detectedCodes.length > 0) {
-                      const id = detectedCodes[0].rawValue.trim();
+                      const id = detectedCodes[0].rawValue.trim().toUpperCase();
                       if (/[.#$\[\]]/.test(id)) {
                         setLoginError("Mã QR không hợp lệ. Vui lòng quét mã chứa ID Trạm.");
                       } else {
