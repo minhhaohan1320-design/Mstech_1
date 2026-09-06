@@ -88,24 +88,36 @@ void postTransmission() { digitalWrite(RS485_DE_RE_PIN, LOW); }
 // ==============================================================
 void initWiFi() {
   preferences.begin("wifi_config", false);
+  
+  // THÊM DÒNG NÀY VÀO ĐỂ XÓA SẠCH BỘ NHỚ WIFI BỊ LỖI
+  preferences.clear(); 
+
   String ssid = preferences.getString("ssid", "");
   String pass = preferences.getString("pass", "");
 
   if (ssid == "") {
-    ssid = "4G-UFI-XX"; pass = "1234567890";
+    ssid = "Nguyen Son"; pass = "0936101345";
+    Serial.println(">> Su dung WiFi mac dinh: " + ssid);
+  } else {
+    Serial.println(">> Su dung WiFi da luu tren Flash Memory: " + ssid);
   }
+
+  Serial.println("Dang ket noi WiFi: " + ssid);
   WiFi.begin(ssid.c_str(), pass.c_str());
   
   int retries = 0;
   while (WiFi.status() != WL_CONNECTED && retries < 40) { 
-    delay(500); retries++;
+    delay(500); Serial.print("."); retries++;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\n[!] Loi WiFi! Khong tim thay mang. Chuyen sang AP Mode...");
     WiFi.mode(WIFI_AP);
     WiFi.softAP("MSTech_Config", "12345678");
+    Serial.print("IP Cau hinh: "); Serial.println(WiFi.softAPIP());
     isAPMode = true;
   } else {
+    Serial.println("\n[v] WiFi KET NOI THANH CONG. IP: " + WiFi.localIP().toString());
     isAPMode = false;
   }
 }
@@ -114,16 +126,21 @@ void initWiFi() {
 // 5. HÀM QUẢN LÝ THẺ NHỚ SD
 // ==============================================================
 void initSDCard() {
+  Serial.println(">> Dang kiem tra the Micro SD...");
   spiSD.begin(SPI_SCK, SPI_MISO, SPI_MOSI, SD_CS_PIN);
-  if (SD.begin(SD_CS_PIN, spiSD)) {
-    if (!SD.exists(fileName)) {
-      dataFile = SD.open(fileName, FILE_WRITE);
-      if (dataFile) {
-        dataFile.println("timestamp,n,p,k,moisture,soilTemp,waterTemp,ph");
-        dataFile.close();
-      }
+  if (!SD.begin(SD_CS_PIN, spiSD)) {
+    Serial.println("[!] Khong thay the Micro SD (Kiem tra day hoac the bi hu).");
+    return;
+  }
+  if (!SD.exists(fileName)) {
+    Serial.println(">> Tao file log_data.csv moi tren SD.");
+    dataFile = SD.open(fileName, FILE_WRITE);
+    if (dataFile) {
+      dataFile.println("timestamp,n,p,k,moisture,soilTemp,waterTemp,ph");
+      dataFile.close();
     }
   }
+  Serial.println("[v] Khoi tao the SD thanh cong.");
 }
 
 void logDataToSD(String timestamp) {
@@ -285,6 +302,8 @@ void handleFirebaseCommands() {
           ESP.restart(); // Khởi động lại để kết nối WiFi mới
         }
       }
+    } else {
+      Serial.println("[!] Loi doc Firebase: " + fbdo.errorReason());
     }
   }
 }
@@ -310,6 +329,10 @@ void setup() {
   rgbLed.show();            
   
   Serial.begin(115200);
+  delay(2000); // Đợi 2 giây để cổng Serial máy tính kịp mở
+  Serial.println("\n\n===================================");
+  Serial.println("  ESP32-S3 KHOI DONG THANH CONG!");
+  Serial.println("===================================");
   
   waterSensor.begin();
   pinMode(PH_ANALOG_PIN, INPUT);
@@ -334,6 +357,14 @@ void setup() {
   if (!isAPMode) {
     config.api_key = API_KEY;
     config.database_url = DATABASE_URL;
+    
+    Serial.println(">> Dang ket noi Firebase...");
+    if (Firebase.signUp(&config, &auth, "", "")) {
+      Serial.println("[v] Firebase dang nhap thanh cong (An danh)!");
+    } else {
+      Serial.printf("[!] Loi dang nhap Firebase: %s\n", config.signer.signupError.message.c_str());
+    }
+
     Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
   }
